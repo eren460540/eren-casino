@@ -1,7 +1,11 @@
+import os
 import discord
 from discord import app_commands
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN environment variable is not set!")
 
 class MyClient(discord.Client):
     def __init__(self):
@@ -10,7 +14,6 @@ class MyClient(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # Sync slash commands to Discord
         await self.tree.sync()
 
 client = MyClient()
@@ -21,11 +24,11 @@ async def on_ready():
 
 @client.tree.command(
     name="hello",
-    description="👋 Say hello and receive a friendly greeting from the bot"
+    description="👋 Say hello and receive a friendly greeting"
 )
 async def hello(interaction: discord.Interaction):
     await interaction.response.send_message(
-        "Hello there! 👋 I'm happy to see you!"
+        f"Hello {interaction.user.mention}! 👋"
     )
 
 client.run(TOKEN)
