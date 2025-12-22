@@ -525,6 +525,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
                 "/zoo          → view animals (counts only)  \n"
                 "/index        → global animal index (all drop rates & stats)  \n"
                 "/stats <x>    → view animal stats & lore  \n"
+                "/team view    → see your current team  \n"
                 "/team add     → build your team  \n"
                 "/team remove  → remove from team  \n"
                 "/hunt <amt>   → hunt animals  \n"
