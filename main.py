@@ -370,16 +370,171 @@ async def on_ready():
     print(f"✅ Logged in as {client.user}")
 
 
+def build_help_embed(page: int) -> Optional[discord.Embed]:
+    if page == 1:
+        embed = discord.Embed(
+            title="📘 Emoji Zoo Battle Bot — Help (1/2)",
+            description=(
+                "Collect animals, build teams, and battle enemies with hidden difficulty."
+            ),
+            color=0x9B59B6,
+        )
+        embed.add_field(
+            name="[🎯 Core Loop]",
+            value=(
+                "1️⃣ Claim daily rewards  \n"
+                "2️⃣ Win battles to gain energy  \n"
+                "3️⃣ Hunt animals using coins + energy  \n"
+                "4️⃣ Build a Tank / Attack / Support team  \n"
+                "5️⃣ Repeat and grow your zoo  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[💰 Currencies]",
+            value=(
+                "💰 Coins  \n"
+                "• Used for hunting animals  \n\n"
+                "🔋 Energy  \n"
+                "• Required for hunting  \n"
+                "• Gained from battle wins  \n"
+                "• NO LIMIT — stacks forever  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[🧾 Commands]",
+            value=(
+                "!daily        → daily rewards  \n"
+                "/balance      → show coins & energy  \n"
+                "/zoo          → view animals (counts only)  \n"
+                "/stats <x>    → view animal stats  \n"
+                "/team add     → build your team  \n"
+                "/team remove  → remove from team  \n"
+                "/hunt <amt>   → hunt animals  \n"
+                "/battle       → fight enemy teams  \n"
+                "/sell <x> <n> → sell animals  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[🐾 Animal Input]",
+            value=(
+                "Animals can be referenced by:\n"
+                "• Emoji (🐘)\n"
+                "• Alias (elephant)"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Use !help 2 for battle rules")
+        return embed
+
+    if page == 2:
+        embed = discord.Embed(
+            title="📘 Emoji Zoo Battle Bot — Help (2/2)",
+            color=0x3498DB,
+        )
+        embed.add_field(
+            name="[🧑‍🤝‍🧑 Team Slots]",
+            value=(
+                "Slot 1 → 🛡️ Tank only  \n"
+                "Slot 2 → ⚔️ Attack only  \n"
+                "Slot 3 → 🧪 Support only  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[🛡️ Team Defense Aura]",
+            value=(
+                "• Team DEF = sum of DEF of ALIVE units  \n"
+                "• Defense reduces ALL incoming hits  \n"
+                "• When a unit dies, its DEF is removed  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[⚔️ Damage Formula]",
+            value=(
+                "damage = max(1, ATK - TEAM_DEF)\n\n"
+                "Example:\n"
+                "ATK 13 vs DEF 3 → 10 damage  \n"
+                "Minimum damage is always 1  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[🤝 Selling Rule]",
+            value=(
+                "Animals in your team are RESERVED:\n"
+                "• Usable in battle  \n"
+                "• NOT sellable  \n"
+                "Even if zoo amount shows 0  "
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="[🎁 Battle Rewards]",
+            value=(
+                "Win:\n"
+                "• +1 energy  \n"
+                "• Coins (harder enemies give more)\n\n"
+                "Lose:\n"
+                "• No rewards"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Build smart teams — roles matter")
+        return embed
+
+    return None
+
+
+def parse_help_page(content: str) -> int:
+    parts = content.strip().split()
+    if len(parts) >= 2 and parts[1].isdigit():
+        return int(parts[1])
+    return 1
+
+
+@client.tree.command(name="help", description="📘 View the Emoji Zoo help pages")
+@app_commands.describe(page="Help page number (1 or 2)")
+async def help_command(interaction: discord.Interaction, page: int = 1):
+    embed = build_help_embed(page)
+    if not embed:
+        await interaction.response.send_message(
+            "❌ Invalid page. Choose 1 or 2.", ephemeral=True
+        )
+        return
+    await interaction.response.send_message(embed=embed)
+
+
+HELP_ALIASES = {"!help", "!h", "!guide", "!commands"}
+
+
+@client.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+    content = message.content.strip()
+    lowered = content.lower()
+    if not lowered:
+        return
+    if any(lowered.startswith(alias) for alias in HELP_ALIASES):
+        page = parse_help_page(lowered)
+        embed = build_help_embed(page)
+        if not embed:
+            await message.channel.send("❌ Invalid page. Choose 1 or 2.")
+            return
+        await message.channel.send(embed=embed)
+
+
 @client.tree.command(name="balance", description="💼 Check your coins and energy")
 async def balance(interaction: discord.Interaction):
     profile = store.load_profile(str(interaction.user.id))
-    msg = (
-        "💼 YOUR BALANCE\n"
-        "────────────────\n"
-        f"💰 Coins: {profile['coins']}\n"
-        f"🔋 Energy: {profile['energy']}"
-    )
-    await interaction.response.send_message(msg)
+    embed = discord.Embed(title="💼 Your Balance", color=0xF1C40F)
+    embed.add_field(name="💰 Coins", value=str(profile["coins"]), inline=False)
+    embed.add_field(name="🔋 Energy", value=str(profile["energy"]), inline=False)
+    await interaction.response.send_message(embed=embed)
 
 
 @client.tree.command(name="daily", description="🎁 Claim your daily coins reward")
@@ -388,16 +543,25 @@ async def daily(interaction: discord.Interaction):
     now_ts = now()
     if profile["daily_until"] > now_ts:
         wait = format_cooldown(profile["daily_until"] - now_ts)
-        await interaction.response.send_message(
-            f"⏳ Cooldown\nTry again in {wait}.", ephemeral=True
+        embed = discord.Embed(
+            title="⏳ Daily Cooldown",
+            description=(
+                "You already claimed your daily reward.\n"
+                f"Try again in {wait}."
+            ),
+            color=0xE74C3C,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     profile["coins"] += 100
+    profile["energy"] += 40
     profile["daily_until"] = now_ts + 24 * 3600
     store.save_profile(profile)
-    await interaction.response.send_message(
-        "🎁 DAILY REWARD\n" "💰 Coins gained: +100\n" "⏳ Come back in 24h"
-    )
+    embed = discord.Embed(title="🎁 Daily Reward", color=0x2ECC71)
+    embed.add_field(name="💰 Coins", value="+100", inline=False)
+    embed.add_field(name="🔋 Energy", value="+40", inline=False)
+    embed.set_footer(text="Come back in 24 hours")
+    await interaction.response.send_message(embed=embed)
 
 
 @client.tree.command(name="zoo", description="🗂️ View your zoo inventory counts")
