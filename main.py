@@ -462,12 +462,26 @@ class MyClient(discord.Client):
 client = MyClient()
 
 
+DEV_GUILD_ID = 1452648204519739483  # your server
+
 @client.event
 async def on_ready():
-    desired_username = "ZyraZoo"
-    if client.user and client.user.name != desired_username:
-        await client.user.edit(username=desired_username)
-    print(f"✅ Logged in as {client.user}")
+    print(f"Logged in as {client.user} ({client.user.id})")
+
+    # Global sync (slow, but for all servers)
+    try:
+        await client.tree.sync()
+        print("🌍 Global slash commands synced")
+    except Exception as e:
+        print("❌ Global sync failed:", e)
+
+    # Dev guild sync (instant)
+    try:
+        dev_guild = discord.Object(id=DEV_GUILD_ID)
+        await client.tree.sync(guild=dev_guild)
+        print("⚡ Dev guild slash commands synced")
+    except Exception as e:
+        print("❌ Dev guild sync failed:", e)
 
 
 def build_help_embed(page: int) -> Optional[discord.Embed]:
