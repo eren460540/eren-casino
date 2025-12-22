@@ -506,6 +506,14 @@ async def on_message(message: discord.Message):
             await message.channel.send("❌ Invalid page. Choose 1 or 2.")
             return
         await message.channel.send(embed=embed)
+        return
+
+    if lowered.startswith("-data"):
+        store._write_data()
+        await message.channel.send(
+            "📂 Current users.json backup. Replace your local file with this copy.",
+            file=discord.File(DATA_FILE_PATH, filename="users.json"),
+        )
 
 
 @client.tree.command(name="balance", description="💼 Check your coins and energy")
@@ -956,7 +964,7 @@ async def battle(interaction: discord.Interaction):
         allowed_indices = sorted(allowed)
 
         player_power = sum(power(a) for a in player_animals.values())
-        enemy_multiplier = random.uniform(0.75, 1.25)
+        enemy_multiplier = random.uniform(0.85, 1.3)
         target_power = player_power * enemy_multiplier
 
         best_team: Optional[Dict[str, Animal]] = None
