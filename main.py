@@ -1428,4 +1428,24 @@ async def battle(interaction: discord.Interaction):
         )
 
 
+
+
+
+@client.event
+async def on_ready():
+    print("====== COMMAND DEBUG ======")
+    print("Tree commands registered:")
+    for cmd in client.tree.get_commands():
+        print("-", cmd.name)
+    print("===========================")
+
+    await client.tree.sync()
+
+
+
+
+
+
+
+
 client.run(TOKEN)
