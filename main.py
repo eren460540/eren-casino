@@ -1436,20 +1436,24 @@ DEV_GUILD_ID = 1452648204519739483
 @client.event
 async def on_ready():
     print("====== COMMAND DEBUG ======")
-    print("Tree commands registered:")
     for cmd in client.tree.get_commands():
         print("-", cmd.name)
     print("===========================")
 
-    # 🔥 FORCE GUILD SYNC (UNSTICKS DISCORD)
     dev_guild = discord.Object(id=DEV_GUILD_ID)
-    synced = await client.tree.sync(guild=dev_guild)
-    print(f"⚡ Forced guild sync: {len(synced)} commands")
 
-    # 🌍 ALSO sync globally (keep this)
+    # 🔥 STEP 1: CLEAR guild commands
+    client.tree.clear_commands(guild=dev_guild)
+    await client.tree.sync(guild=dev_guild)
+    print("🧹 Cleared guild commands")
+
+    # ⚡ STEP 2: RE-SYNC commands to guild
+    synced = await client.tree.sync(guild=dev_guild)
+    print(f"⚡ Re-synced {len(synced)} guild commands")
+
+    # 🌍 STEP 3: Sync globally (keep this)
     await client.tree.sync()
     print("🌍 Global sync requested")
-
 
 
 
