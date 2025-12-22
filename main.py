@@ -32,7 +32,8 @@ class Animal:
     aliases: List[str]
 
 
-DATA_FILE_PATH = "/data/users.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE_PATH = os.path.join(BASE_DIR, "users.json")
 
 
 RARITY_ORDER = [
@@ -179,7 +180,9 @@ class DataStore:
         self.data = self._load_data()
 
     def _load_data(self) -> Dict:
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        dir_name = os.path.dirname(self.path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         if not os.path.exists(self.path):
             initial_content = {"version": 1, "users": {}}
             with open(self.path, "w", encoding="utf-8") as f:
@@ -295,7 +298,7 @@ def coins_reward(enemy_multiplier: float) -> int:
 
 
 def enemy_signature(team: Dict[str, Animal]) -> str:
-    return "|".join(team[f"slot{i}"] for i in range(1, 4))
+    return "|".join(team[f"slot{i}"].animal_id for i in range(1, 4))
 
 
 def team_def_alive(team_hp: Dict[str, int], team_animals: Dict[str, Animal]) -> int:
@@ -341,6 +344,9 @@ client = MyClient()
 
 @client.event
 async def on_ready():
+    desired_username = "ZyraZoo"
+    if client.user and client.user.name != desired_username:
+        await client.user.edit(username=desired_username)
     print(f"✅ Logged in as {client.user}")
 
 
