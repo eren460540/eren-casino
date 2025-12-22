@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -31,6 +30,9 @@ class Animal:
     atk: int
     defense: int
     aliases: List[str]
+
+
+DATA_FILE_PATH = "/data/users.json"
 
 
 RARITY_ORDER = [
@@ -172,99 +174,61 @@ RARITY_SELL_VALUE = {
 
 
 class DataStore:
-    def __init__(self, path: str = "zoo.db"):
-        self.conn = sqlite3.connect(path)
-        self.conn.row_factory = sqlite3.Row
-        self._prepare()
+    def __init__(self, path: str = DATA_FILE_PATH):
+        self.path = path
+        self.data = self._load_data()
 
-    def _prepare(self) -> None:
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS profiles (
-                user_id TEXT PRIMARY KEY,
-                coins INTEGER NOT NULL,
-                energy INTEGER NOT NULL,
-                zoo TEXT NOT NULL,
-                team TEXT NOT NULL,
-                hunt_until REAL,
-                battle_until REAL,
-                daily_until REAL,
-                last_enemy_signature TEXT
-            )
-            """
-        )
-        self.conn.commit()
+    def _load_data(self) -> Dict:
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        if not os.path.exists(self.path):
+            initial_content = {"version": 1, "users": {}}
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(initial_content, f, indent=2)
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as exc:
+            print(f"❌ Failed to parse users.json: {exc}")
+            raise RuntimeError("users.json is invalid. Fix the file before running the bot.")
+
+        if "version" not in data or "users" not in data:
+            raise RuntimeError("users.json is missing required keys. Aborting startup.")
+        return data
 
     def _default_profile(self, user_id: str) -> Dict:
-        zoo = {animal_id: 0 for animal_id in ANIMALS.keys()}
         team = {"slot1": None, "slot2": None, "slot3": None}
         return {
             "user_id": user_id,
             "coins": 0,
             "energy": 0,
-            "zoo": zoo,
+            "zoo": {},
             "team": team,
-            "hunt_until": 0.0,
-            "battle_until": 0.0,
-            "daily_until": 0.0,
+            "cooldowns": {"hunt": 0.0, "battle": 0.0},
             "last_enemy_signature": None,
         }
 
     def load_profile(self, user_id: str) -> Dict:
-        cur = self.conn.cursor()
-        row = cur.execute(
-            "SELECT * FROM profiles WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        if not row:
-            profile = self._default_profile(user_id)
-            self.save_profile(profile)
-            return profile
-        return {
-            "user_id": row["user_id"],
-            "coins": row["coins"],
-            "energy": row["energy"],
-            "zoo": json.loads(row["zoo"]),
-            "team": json.loads(row["team"]),
-            "hunt_until": row["hunt_until"] or 0.0,
-            "battle_until": row["battle_until"] or 0.0,
-            "daily_until": row["daily_until"] or 0.0,
-            "last_enemy_signature": row["last_enemy_signature"],
-        }
+        if user_id not in self.data.get("users", {}):
+            self.data["users"][user_id] = self._default_profile(user_id)
+            self._write_data()
+        profile = self.data["users"][user_id]
+        profile.setdefault("cooldowns", {"hunt": 0.0, "battle": 0.0})
+        profile.setdefault("team", {"slot1": None, "slot2": None, "slot3": None})
+        profile.setdefault("zoo", {})
+        profile.setdefault("last_enemy_signature", None)
+        return profile
 
     def save_profile(self, profile: Dict) -> None:
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO profiles (
-                user_id, coins, energy, zoo, team, hunt_until, battle_until, daily_until, last_enemy_signature
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                coins=excluded.coins,
-                energy=excluded.energy,
-                zoo=excluded.zoo,
-                team=excluded.team,
-                hunt_until=excluded.hunt_until,
-                battle_until=excluded.battle_until,
-                daily_until=excluded.daily_until,
-                last_enemy_signature=excluded.last_enemy_signature
-            """,
-            (
-                profile["user_id"],
-                profile["coins"],
-                profile["energy"],
-                json.dumps(profile["zoo"]),
-                json.dumps(profile["team"]),
-                profile["hunt_until"],
-                profile["battle_until"],
-                profile["daily_until"],
-                profile["last_enemy_signature"],
-            ),
-        )
-        self.conn.commit()
+        self.data.setdefault("users", {})[profile["user_id"]] = profile
+        self._write_data()
+
+    def _write_data(self) -> None:
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2)
 
 
 store = DataStore()
+DAILY_COOLDOWNS: Dict[str, float] = {}
 
 
 # ==============================
@@ -549,10 +513,12 @@ async def balance(interaction: discord.Interaction):
 
 @client.tree.command(name="daily", description="🎁 Claim your daily coins reward")
 async def daily(interaction: discord.Interaction):
-    profile = store.load_profile(str(interaction.user.id))
+    user_id = str(interaction.user.id)
+    profile = store.load_profile(user_id)
     now_ts = now()
-    if profile["daily_until"] > now_ts:
-        wait = format_cooldown(profile["daily_until"] - now_ts)
+    cooldown_until = DAILY_COOLDOWNS.get(user_id, 0.0)
+    if cooldown_until > now_ts:
+        wait = format_cooldown(cooldown_until - now_ts)
         embed = discord.Embed(
             title="⏳ Daily Cooldown",
             description=(
@@ -565,8 +531,8 @@ async def daily(interaction: discord.Interaction):
         return
     profile["coins"] += 100
     profile["energy"] += 40
-    profile["daily_until"] = now_ts + 24 * 3600
     store.save_profile(profile)
+    DAILY_COOLDOWNS[user_id] = now_ts + 24 * 3600
     embed = discord.Embed(title="🎁 Daily Reward", color=0x2ECC71)
     embed.add_field(name="💰 Coins", value="+100", inline=False)
     embed.add_field(name="🔋 Energy", value="+40", inline=False)
@@ -616,6 +582,59 @@ async def stats(interaction: discord.Interaction, animal: str):
 class TeamCommands(app_commands.Group):
     def __init__(self):
         super().__init__(name="team", description="🧭 Manage your battle team slots")
+
+    @app_commands.command(name="view", description="🧑‍🤝‍🧑 View your current team")
+    async def view(self, interaction: discord.Interaction):
+        profile = store.load_profile(str(interaction.user.id))
+        embed = discord.Embed(
+            title="🧑‍🤝‍🧑 Your Team",
+            description="Your active battle team.\nSlot order matters.",
+            color=0x9B59B6,
+        )
+        slot_info = {
+            1: ("slot1", "🛡️ Tank"),
+            2: ("slot2", "⚔️ Attack"),
+            3: ("slot3", "🧪 Support"),
+        }
+        total_hp = 0
+        total_atk = 0
+        total_def = 0
+        for idx, (slot_key, label) in slot_info.items():
+            animal_id = profile["team"].get(slot_key)
+            if animal_id:
+                animal = ANIMALS[animal_id]
+                total_hp += animal.hp
+                total_atk += animal.atk
+                total_def += animal.defense
+                animal_name = animal.animal_id.replace("_", " ").title()
+                embed.add_field(
+                    name=f"Slot {idx} — {label}",
+                    value=(
+                        f"{animal.emoji} {animal_name}\n"
+                        f"❤️ HP: {animal.hp}\n"
+                        f"⚔️ ATK: {animal.atk}\n"
+                        f"🛡️ DEF: {animal.defense}"
+                    ),
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name=f"Slot {idx} — {label}",
+                    value="❌ Empty Slot\nUse /team add <animal> <slot>",
+                    inline=False,
+                )
+
+        embed.add_field(
+            name="TEAM SUMMARY",
+            value=(
+                f"🛡️ Total Team DEF: {total_def}\n"
+                f"❤️ Total Team HP: {total_hp}\n"
+                f"⚔️ Total Team ATK: {total_atk}"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="Slot order: Tank → Attack → Support")
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="add", description="➕ Assign an animal to a team slot")
     @app_commands.describe(animal="Emoji or alias", pos="Team slot (1=TANK, 2=ATTACK, 3=SUPPORT)")
@@ -678,8 +697,8 @@ client.tree.add_command(TeamCommands())
 async def hunt(interaction: discord.Interaction, amount_coins: int):
     profile = store.load_profile(str(interaction.user.id))
     now_ts = now()
-    if profile["hunt_until"] > now_ts:
-        wait = format_cooldown(profile["hunt_until"] - now_ts)
+    if profile["cooldowns"]["hunt"] > now_ts:
+        wait = format_cooldown(profile["cooldowns"]["hunt"] - now_ts)
         await interaction.response.send_message(
             f"⏳ Cooldown\nTry again in {wait}.", ephemeral=True
         )
@@ -714,10 +733,10 @@ async def hunt(interaction: discord.Interaction, amount_coins: int):
         rarity = pick_rarity()
         pool = [a for a in ANIMALS.values() if a.rarity == rarity]
         animal = random.choice(pool)
-        profile["zoo"][animal.animal_id] += 1
+        profile["zoo"][animal.animal_id] = profile["zoo"].get(animal.animal_id, 0) + 1
         results.append(animal)
 
-    profile["hunt_until"] = now_ts + 10
+    profile["cooldowns"]["hunt"] = now_ts + 10
     store.save_profile(profile)
 
     grouped: Dict[str, Dict[str, int]] = {rarity: {} for rarity, _ in RARITY_ORDER}
@@ -808,7 +827,8 @@ async def sell(
         total_coins = 0
         total_sold = 0
         for animal_obj, qty in changes:
-            profile["zoo"][animal_obj.animal_id] -= qty
+            current_amount = profile["zoo"].get(animal_obj.animal_id, 0)
+            profile["zoo"][animal_obj.animal_id] = max(0, current_amount - qty)
             total_coins += qty * RARITY_SELL_VALUE[animal_obj.rarity]
             total_sold += qty
         profile["coins"] += total_coins
@@ -903,156 +923,172 @@ async def sell(
 @client.tree.command(name="battle", description="⚔️ Battle an enemy bot for rewards")
 async def battle(interaction: discord.Interaction):
     await interaction.response.defer()
-    profile = store.load_profile(str(interaction.user.id))
-    now_ts = now()
-    if profile["battle_until"] > now_ts:
-        wait = format_cooldown(profile["battle_until"] - now_ts)
-        await interaction.edit_original_response(content=f"⏳ Cooldown\nTry again in {wait}.")
-        return
-    if not all(profile["team"][f"slot{i}"] for i in range(1, 4)):
-        await interaction.edit_original_response(
-            content="❌ Team incomplete\nSet slot 1 (TANK), slot 2 (ATTACK), slot 3 (SUPPORT)."
+    try:
+        profile = store.load_profile(str(interaction.user.id))
+        now_ts = now()
+        if profile["cooldowns"]["battle"] > now_ts:
+            wait = format_cooldown(profile["cooldowns"]["battle"] - now_ts)
+            await interaction.edit_original_response(content=f"⏳ Cooldown\nTry again in {wait}.")
+            return
+        if not all(profile["team"][f"slot{i}"] for i in range(1, 4)):
+            await interaction.edit_original_response(
+                content="❌ Team incomplete\nSet slot 1 (TANK), slot 2 (ATTACK), slot 3 (SUPPORT)."
+            )
+            return
+
+        player_animals: Dict[str, Animal] = {
+            f"slot{i}": ANIMALS[profile["team"][f"slot{i}"]] for i in range(1, 4)
+        }
+
+        avg_index = round(
+            sum(a.rarity_index for a in player_animals.values()) / 3
         )
-        return
+        allowed = set()
+        for idx in (avg_index - 1, avg_index, avg_index + 1):
+            if 0 <= idx <= 5:
+                allowed.add(idx)
+        allowed_indices = sorted(allowed)
 
-    player_animals: Dict[str, Animal] = {
-        f"slot{i}": ANIMALS[profile["team"][f"slot{i}"]] for i in range(1, 4)
-    }
+        player_power = sum(power(a) for a in player_animals.values())
+        enemy_multiplier = random.uniform(0.75, 1.25)
+        target_power = player_power * enemy_multiplier
 
-    avg_index = round(
-        sum(a.rarity_index for a in player_animals.values()) / 3
-    )
-    allowed = set()
-    for idx in (avg_index - 1, avg_index, avg_index + 1):
-        if 0 <= idx <= 5:
-            allowed.add(idx)
-    allowed_indices = sorted(allowed)
+        best_team: Optional[Dict[str, Animal]] = None
+        best_delta = float("inf")
+        last_signature = profile.get("last_enemy_signature")
 
-    player_power = sum(power(a) for a in player_animals.values())
-    enemy_multiplier = random.uniform(0.75, 1.25)
-    target_power = player_power * enemy_multiplier
-
-    best_team: Optional[Dict[str, Animal]] = None
-    best_delta = float("inf")
-    last_signature = profile.get("last_enemy_signature")
-
-    for attempt in range(50):
-        enemy_team = {
-            "slot1": random_animal_by_rarity_and_role(allowed_indices, "TANK"),
-            "slot2": random_animal_by_rarity_and_role(allowed_indices, "ATTACK"),
-            "slot3": random_animal_by_rarity_and_role(allowed_indices, "SUPPORT"),
-        }
-        signature = enemy_signature(enemy_team)
-        if signature == last_signature:
-            continue
-        pwr = sum(power(a) for a in enemy_team.values())
-        delta = abs(pwr - target_power)
-        if delta < best_delta:
-            best_delta = delta
-            best_team = enemy_team
-        if abs(pwr - target_power) <= target_power * 0.07:
-            best_team = enemy_team
-            break
-
-    if not best_team:
-        best_team = {
-            "slot1": random_animal_by_rarity_and_role(allowed_indices, "TANK"),
-            "slot2": random_animal_by_rarity_and_role(allowed_indices, "ATTACK"),
-            "slot3": random_animal_by_rarity_and_role(allowed_indices, "SUPPORT"),
-        }
-
-    enemy_animals = best_team
-    profile["last_enemy_signature"] = enemy_signature(enemy_animals)
-
-    player_hp = {slot: animal.hp for slot, animal in player_animals.items()}
-    enemy_hp = {slot: animal.hp for slot, animal in enemy_animals.items()}
-
-    def first_alive(hp_map: Dict[str, int]) -> Optional[str]:
-        for i in range(1, 4):
-            slot = f"slot{i}"
-            if hp_map[slot] > 0:
-                return slot
-        return None
-
-    def attack_phase(attacker_animals: Dict[str, Animal], attacker_hp: Dict[str, int], defender_animals: Dict[str, Animal], defender_hp: Dict[str, int]):
-        for i in range(1, 4):
-            slot = f"slot{i}"
-            if attacker_hp[slot] <= 0:
+        for attempt in range(50):
+            enemy_team = {
+                "slot1": random_animal_by_rarity_and_role(allowed_indices, "TANK"),
+                "slot2": random_animal_by_rarity_and_role(allowed_indices, "ATTACK"),
+                "slot3": random_animal_by_rarity_and_role(allowed_indices, "SUPPORT"),
+            }
+            signature = enemy_signature(enemy_team)
+            if signature == last_signature:
                 continue
-            target_slot = first_alive(defender_hp)
-            if not target_slot:
+            pwr = sum(power(a) for a in enemy_team.values())
+            delta = abs(pwr - target_power)
+            if delta < best_delta:
+                best_delta = delta
+                best_team = enemy_team
+            if abs(pwr - target_power) <= target_power * 0.07:
+                best_team = enemy_team
                 break
-            def_value = team_def_alive(defender_hp, defender_animals)
-            dmg = max(1, attacker_animals[slot].atk - def_value)
-            defender_hp[target_slot] = max(0, defender_hp[target_slot] - dmg)
 
-    rounds = 0
-    while first_alive(player_hp) and first_alive(enemy_hp) and rounds < 100:
-        rounds += 1
-        attack_phase(player_animals, player_hp, enemy_animals, enemy_hp)
-        if not first_alive(enemy_hp):
-            break
-        attack_phase(enemy_animals, enemy_hp, player_animals, player_hp)
+        if not best_team:
+            best_team = {
+                "slot1": random_animal_by_rarity_and_role(allowed_indices, "TANK"),
+                "slot2": random_animal_by_rarity_and_role(allowed_indices, "ATTACK"),
+                "slot3": random_animal_by_rarity_and_role(allowed_indices, "SUPPORT"),
+            }
 
-    player_alive = first_alive(player_hp) is not None
-    enemy_alive = first_alive(enemy_hp) is not None
-    player_win = player_alive and not enemy_alive
+        enemy_animals = best_team
+        profile["last_enemy_signature"] = enemy_signature(enemy_animals)
 
-    energy_gain = 1 if player_win else 0
-    coin_gain = coins_reward(enemy_multiplier) if player_win else 0
+        player_hp = {slot: animal.hp for slot, animal in player_animals.items()}
+        enemy_hp = {slot: animal.hp for slot, animal in enemy_animals.items()}
 
-    profile["energy"] += energy_gain
-    profile["coins"] += coin_gain
-    profile["battle_until"] = now_ts + 10
-    store.save_profile(profile)
+        def first_alive(hp_map: Dict[str, int]) -> Optional[str]:
+            for i in range(1, 4):
+                slot = f"slot{i}"
+                if hp_map[slot] > 0:
+                    return slot
+            return None
 
-    def format_row(role: str, slot: str, cur_hp: int, max_hp: int, animal: Animal) -> str:
-        bar = hp_bar(cur_hp, max_hp)
-        skull = " 💀" if cur_hp <= 0 else ""
-        return f"{ROLE_EMOJI[role]} {animal.emoji} {animal.animal_id}\nHP [{bar}] {cur_hp}/{max_hp}{skull}"
+        def attack_phase(attacker_animals: Dict[str, Animal], attacker_hp: Dict[str, int], defender_animals: Dict[str, Animal], defender_hp: Dict[str, int]):
+            for i in range(1, 4):
+                slot = f"slot{i}"
+                if attacker_hp[slot] <= 0:
+                    continue
+                target_slot = first_alive(defender_hp)
+                if not target_slot:
+                    break
+                def_value = team_def_alive(defender_hp, defender_animals)
+                dmg = max(1, attacker_animals[slot].atk - def_value)
+                defender_hp[target_slot] = max(0, defender_hp[target_slot] - dmg)
 
-    lines: List[str] = []
-    result_title = "YOU WON" if player_win else "YOU LOST"
-    lines.append(f"⚔️ BATTLE RESULT — {result_title}")
-    lines.append("──────────────────────────────────────")
-    lines.append("")
-    lines.append("YOUR TEAM            ENEMY TEAM")
-    lines.append("")
+        rounds = 0
+        while first_alive(player_hp) and first_alive(enemy_hp) and rounds < 100:
+            rounds += 1
+            attack_phase(player_animals, player_hp, enemy_animals, enemy_hp)
+            if not first_alive(enemy_hp):
+                break
+            attack_phase(enemy_animals, enemy_hp, player_animals, player_hp)
 
-    for i in range(1, 4):
-        slot = f"slot{i}"
-        pa = player_animals[slot]
-        ea = enemy_animals[slot]
-        player_row = format_row(pa.role, slot, player_hp[slot], pa.hp, pa)
-        enemy_row = format_row(ea.role, slot, enemy_hp[slot], ea.hp, ea)
-        merged = "\n".join(
-            [
-                f"{ROLE_EMOJI[pa.role]} {pa.emoji} {pa.animal_id}    {ROLE_EMOJI[ea.role]} {ea.emoji} {ea.animal_id}",
-                f"HP [{hp_bar(player_hp[slot], pa.hp)}] {player_hp[slot]}/{pa.hp}{' ' if player_hp[slot]>0 else ' 💀'}    "
-                f"HP [{hp_bar(enemy_hp[slot], ea.hp)}] {enemy_hp[slot]}/{ea.hp}{' ' if enemy_hp[slot]>0 else ' 💀'}",
-            ]
-        )
-        lines.append(merged)
+        player_alive = first_alive(player_hp) is not None
+        enemy_alive = first_alive(enemy_hp) is not None
+        cap_reached = rounds >= 100 and player_alive and enemy_alive
+        if cap_reached:
+            player_hp_total = sum(max(0, hp) for hp in player_hp.values())
+            enemy_hp_total = sum(max(0, hp) for hp in enemy_hp.values())
+            player_win = player_hp_total > enemy_hp_total
+        else:
+            player_win = player_alive and not enemy_alive
+
+        energy_gain = 1 if player_win else 0
+        coin_gain = coins_reward(enemy_multiplier) if player_win else 0
+
+        profile["energy"] += energy_gain
+        profile["coins"] += coin_gain
+        profile["cooldowns"]["battle"] = now_ts + 10
+        store.save_profile(profile)
+
+        def format_row(role: str, slot: str, cur_hp: int, max_hp: int, animal: Animal) -> str:
+            bar = hp_bar(cur_hp, max_hp)
+            skull = " 💀" if cur_hp <= 0 else ""
+            return f"{ROLE_EMOJI[role]} {animal.emoji} {animal.animal_id}\nHP [{bar}] {cur_hp}/{max_hp}{skull}"
+
+        lines: List[str] = []
+        result_title = "YOU WON" if player_win else "YOU LOST"
+        lines.append(f"⚔️ BATTLE RESULT — {result_title}")
+        lines.append("──────────────────────────────────────")
+        lines.append("")
+        lines.append("YOUR TEAM            ENEMY TEAM")
         lines.append("")
 
-    your_def = team_def_alive(player_hp, player_animals)
-    enemy_def = team_def_alive(enemy_hp, enemy_animals)
+        for i in range(1, 4):
+            slot = f"slot{i}"
+            pa = player_animals[slot]
+            ea = enemy_animals[slot]
+            player_row = format_row(pa.role, slot, player_hp[slot], pa.hp, pa)
+            enemy_row = format_row(ea.role, slot, enemy_hp[slot], ea.hp, ea)
+            merged = "\n".join(
+                [
+                    f"{ROLE_EMOJI[pa.role]} {pa.emoji} {pa.animal_id}    {ROLE_EMOJI[ea.role]} {ea.emoji} {ea.animal_id}",
+                    f"HP [{hp_bar(player_hp[slot], pa.hp)}] {player_hp[slot]}/{pa.hp}{' ' if player_hp[slot]>0 else ' 💀'}    "
+                    f"HP [{hp_bar(enemy_hp[slot], ea.hp)}] {enemy_hp[slot]}/{ea.hp}{' ' if enemy_hp[slot]>0 else ' 💀'}",
+                ]
+            )
+            lines.append(merged)
+            lines.append("")
 
-    sample_attacker = max(player_animals.values(), key=lambda a: a.atk)
-    sample_def = enemy_def if enemy_def > 0 else 0
-    sample_dmg = max(1, sample_attacker.atk - sample_def)
+        your_def = team_def_alive(player_hp, player_animals)
+        enemy_def = team_def_alive(enemy_hp, enemy_animals)
 
-    lines.append("──────────────────────────────────────")
-    lines.append(f"🛡️ Your Team DEF: −{your_def} DMG")
-    lines.append(f"🛡️ Enemy Team DEF: −{enemy_def} DMG")
-    lines.append(f"⚔️ Example Hit: {sample_attacker.atk} → {sample_dmg}")
-    lines.append("──────────────────────────────────────")
-    lines.append("")
-    lines.append("🎁 Rewards")
-    lines.append(f"💰 Coins: +{coin_gain}")
-    lines.append(f"🔋 Energy: +{energy_gain}")
+        sample_attacker = max(player_animals.values(), key=lambda a: a.atk)
+        sample_def = enemy_def if enemy_def > 0 else 0
+        sample_dmg = max(1, sample_attacker.atk - sample_def)
 
-    await interaction.edit_original_response(content="\n".join(lines))
+        lines.append("──────────────────────────────────────")
+        lines.append(f"🛡️ Your Team DEF: −{your_def} DMG")
+        lines.append(f"🛡️ Enemy Team DEF: −{enemy_def} DMG")
+        lines.append(f"⚔️ Example Hit: {sample_attacker.atk} → {sample_dmg}")
+        lines.append("──────────────────────────────────────")
+        lines.append("")
+        lines.append("🎁 Rewards")
+        lines.append(f"💰 Coins: +{coin_gain}")
+        lines.append(f"🔋 Energy: +{energy_gain}")
+
+        await interaction.edit_original_response(content="\n".join(lines))
+    except Exception as exc:
+        print(f"❌ Battle error: {exc}")
+        await interaction.edit_original_response(
+            content=(
+                "❌ Battle Failed\n"
+                "Something went wrong during the fight.\n"
+                "Please try again."
+            )
+        )
 
 
 client.run(TOKEN)
