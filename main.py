@@ -506,7 +506,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
         embed.add_field(
             name="[🧾 Commands]",
             value=(
-                "!daily        → daily rewards  \n"
+                "/daily        → daily rewards  \n"
                 "/balance      → show coins & energy  \n"
                 "/zoo          → view animals (counts only)  \n"
                 "/index        → global animal index (all drop rates & stats)  \n"
