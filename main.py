@@ -301,6 +301,16 @@ def hp_bar(current: int, maximum: int) -> str:
     return "█" * filled + "░" * (10 - filled)
 
 
+SUPERSCRIPT_MAP = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
+
+
+def superscript_number(num: int) -> str:
+    num_str = str(max(0, num))
+    if len(num_str) == 1:
+        return SUPERSCRIPT_MAP["0"] + SUPERSCRIPT_MAP[num_str]
+    return "".join(SUPERSCRIPT_MAP[d] for d in num_str)
+
+
 def reserved_count(team: Dict[str, Optional[str]], animal_id: str) -> int:
     return sum(1 for slot in team.values() if slot == animal_id)
 
@@ -574,10 +584,12 @@ async def zoo(interaction: discord.Interaction):
         entries = []
         for animal in animals:
             amount = profile["zoo"].get(animal.animal_id, 0)
-            locked = " 🔒" if amount == 0 and reserved_count(profile["team"], animal.animal_id) else ""
-            entries.append(f"{animal.emoji} {amount:02d}{locked}")
-        lines.append(f"{symbol} {rarity}\n" + " ".join(entries))
-    await interaction.response.send_message("\n\n".join(lines))
+            if amount <= 0:
+                continue
+            entries.append(f"{animal.emoji} {superscript_number(amount)}")
+        if entries:
+            lines.append(f"{symbol} {rarity.capitalize()}\n" + "  ".join(entries))
+    await interaction.response.send_message("\n\n".join(lines) if lines else "Your zoo is empty.")
 
 
 @client.tree.command(name="stats", description="📊 Show stats for an animal (emoji or alias)")
@@ -697,6 +709,7 @@ async def hunt(interaction: discord.Interaction, amount_coins: int):
     profile["energy"] -= rolls
 
     results: List[Animal] = []
+    before_counts = dict(profile["zoo"])
     for _ in range(rolls):
         rarity = pick_rarity()
         pool = [a for a in ANIMALS.values() if a.rarity == rarity]
@@ -707,76 +720,198 @@ async def hunt(interaction: discord.Interaction, amount_coins: int):
     profile["hunt_until"] = now_ts + 10
     store.save_profile(profile)
 
-    lines = ["🌱 {user}, hunt is empowered by luck".format(user=interaction.user.display_name)]
-    lines.append("")
-    lines.append(f"🎯 You spent: {amount_coins} coins")
-    lines.append(f"🔋 Energy used: {rolls}")
-    lines.append("")
-    lines.append("🐾 You found:")
-    emoji_line = ""
-    count = 0
+    grouped: Dict[str, Dict[str, int]] = {rarity: {} for rarity, _ in RARITY_ORDER}
     for animal in results:
-        emoji_line += animal.emoji + " "
-        count += 1
-        if count % 7 == 0:
-            lines.append(emoji_line.strip())
-            emoji_line = ""
-    if emoji_line:
-        lines.append(emoji_line.strip())
+        grouped[animal.rarity][animal.animal_id] = grouped[animal.rarity].get(
+            animal.animal_id, 0
+        ) + 1
+
+    lines = ["🌱 Hunt Results", "────────────────"]
+
+    for rarity, symbol in RARITY_ORDER:
+        animals = grouped[rarity]
+        if not animals:
+            continue
+        entries = []
+        for animal_id, count in sorted(animals.items()):
+            animal = ANIMALS[animal_id]
+            is_new = before_counts.get(animal_id, 0) == 0
+            new_tag = " 🆕" if is_new else ""
+            entries.append(f"{animal.emoji} {superscript_number(count)}{new_tag}")
+        lines.append("")
+        lines.append(f"{symbol} {rarity.capitalize()}")
+        lines.append("  ".join(entries))
+
+    lines.append("")
+    lines.append("────────────────")
+    lines.append(f"💰 Coins spent: {amount_coins}")
+    lines.append(f"🔋 Energy used: {rolls}")
 
     await interaction.response.send_message("\n".join(lines))
 
 
+class SellConfirmView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=15)
+        self.user_id = user_id
+        self.confirmed = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("You cannot respond to this.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Yes ✅", style=discord.ButtonStyle.success, emoji="🟢")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Cancel ❌", style=discord.ButtonStyle.danger, emoji="🔴")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.confirmed = False
+        await interaction.response.defer()
+        self.stop()
+
+
 @client.tree.command(name="sell", description="💰 Sell animals for coins (reserves protected)")
-@app_commands.describe(animal="Emoji or alias", amount="Number to sell")
-async def sell(interaction: discord.Interaction, animal: str, amount: int):
-    a = resolve_animal(animal)
-    if not a:
-        await interaction.response.send_message(
-            "❌ Unknown animal\nTry an emoji or alias.", ephemeral=True
-        )
-        return
-    if amount < 1:
-        await interaction.response.send_message(
-            "❌ Invalid amount\nAmount must be at least 1.", ephemeral=True
-        )
-        return
+@app_commands.describe(
+    mode="Sell a single animal or all animals of a rarity",
+    target="Emoji/alias when selling an animal, or rarity name",
+    amount="Number to sell or 'all'",
+)
+@app_commands.choices(
+    mode=[
+        app_commands.Choice(name="Animal", value="animal"),
+        app_commands.Choice(name="Rarity", value="rarity"),
+    ]
+)
+async def sell(
+    interaction: discord.Interaction, mode: app_commands.Choice[str], target: str, amount: str
+):
+    mode_value = mode.value if isinstance(mode, app_commands.Choice) else str(mode)
+    amount_lower = amount.lower().strip()
+    sell_all = amount_lower == "all"
+    sell_count = None
+    if not sell_all:
+        if not amount_lower.isdigit() or int(amount_lower) <= 0:
+            await interaction.response.send_message(
+                "❌ Invalid amount\nUse a positive number or 'all'.", ephemeral=True
+            )
+            return
+        sell_count = int(amount_lower)
 
     profile = store.load_profile(str(interaction.user.id))
-    sellable = sellable_amount(profile, a.animal_id)
-    if amount > sellable:
-        await interaction.response.send_message(
-            "❌ Cannot sell\nThat animal is currently in your team (reserved)."
-            if sellable == 0
-            else f"❌ Cannot sell\nYou can sell up to {sellable} of that animal.",
-            ephemeral=True,
+
+    def finalize_sale(changes: List[Tuple[Animal, int]]) -> Tuple[int, int]:
+        total_coins = 0
+        total_sold = 0
+        for animal_obj, qty in changes:
+            profile["zoo"][animal_obj.animal_id] -= qty
+            total_coins += qty * RARITY_SELL_VALUE[animal_obj.rarity]
+            total_sold += qty
+        profile["coins"] += total_coins
+        store.save_profile(profile)
+        return total_sold, total_coins
+
+    if mode_value == "animal":
+        a = resolve_animal(target)
+        if not a:
+            await interaction.response.send_message(
+                "❌ Unknown animal\nTry an emoji or alias.", ephemeral=True
+            )
+            return
+        reserved = reserved_count(profile["team"], a.animal_id)
+        if reserved > 0:
+            await interaction.response.send_message(
+                "❌ Cannot sell\nThat animal is currently in your team.\nRemove it from the team first.",
+                ephemeral=True,
+            )
+            return
+        owned = profile["zoo"].get(a.animal_id, 0)
+        if owned <= 0:
+            await interaction.response.send_message(
+                "❌ Cannot sell\nYou don't own that animal.", ephemeral=True
+            )
+            return
+        sell_amount = owned if sell_all else sell_count or 0
+        if sell_amount > owned:
+            await interaction.response.send_message(
+                f"❌ Cannot sell\nYou can sell up to {owned} of that animal.",
+                ephemeral=True,
+            )
+            return
+
+        plan = [(a, sell_amount)]
+        needs_confirm = a.rarity in {"EPIC", "LEGENDARY", "SPECIAL", "HIDDEN"}
+
+    else:
+        rarity_key = target.strip().upper()
+        if rarity_key not in RARITY_SELL_VALUE:
+            await interaction.response.send_message(
+                "❌ Invalid rarity\nUse common, uncommon, rare, epic, legendary, special, or hidden.",
+                ephemeral=True,
+            )
+            return
+        plan: List[Tuple[Animal, int]] = []
+        for animal_obj in ANIMALS.values():
+            if animal_obj.rarity != rarity_key:
+                continue
+            available = sellable_amount(profile, animal_obj.animal_id)
+            if available <= 0:
+                continue
+            qty = available if sell_all else min(available, sell_count or 0)
+            if qty > 0:
+                plan.append((animal_obj, qty))
+        if not plan:
+            await interaction.response.send_message(
+                "❌ Cannot sell\nNo animals of that rarity are available (team animals are excluded).",
+                ephemeral=True,
+            )
+            return
+        needs_confirm = True
+
+    if needs_confirm:
+        embed = discord.Embed(title="⚠️ Confirm Sale", description="You are about to sell the following:")
+        embed.add_field(
+            name="Items",
+            value="\n".join(f"{animal.emoji} x{qty}" for animal, qty in plan),
+            inline=False,
+        )
+        view = SellConfirmView(interaction.user.id)
+        await interaction.response.send_message(embed=embed, view=view)
+        message = await interaction.original_response()
+        await view.wait()
+        if not view.confirmed:
+            await message.edit(content="Sale cancelled.", embed=None, view=None)
+            return
+        total_sold, total_coins = finalize_sale(plan)
+        await message.edit(
+            content=f"✅ SOLD\nItems: {total_sold}\n💰 Coins: +{total_coins}",
+            embed=None,
+            view=None,
         )
         return
 
-    profile["zoo"][a.animal_id] -= amount
-    earned = amount * RARITY_SELL_VALUE[a.rarity]
-    profile["coins"] += earned
-    store.save_profile(profile)
-
+    total_sold, total_coins = finalize_sale(plan)
     await interaction.response.send_message(
-        f"✅ SOLD\n{a.emoji} x{amount}\n💰 Coins: +{earned}"
+        f"✅ SOLD\n{plan[0][0].emoji} x{total_sold}\n💰 Coins: +{total_coins}"
     )
 
 
 @client.tree.command(name="battle", description="⚔️ Battle an enemy bot for rewards")
 async def battle(interaction: discord.Interaction):
+    await interaction.response.defer()
     profile = store.load_profile(str(interaction.user.id))
     now_ts = now()
     if profile["battle_until"] > now_ts:
         wait = format_cooldown(profile["battle_until"] - now_ts)
-        await interaction.response.send_message(
-            f"⏳ Cooldown\nTry again in {wait}.", ephemeral=True
-        )
+        await interaction.edit_original_response(content=f"⏳ Cooldown\nTry again in {wait}.")
         return
     if not all(profile["team"][f"slot{i}"] for i in range(1, 4)):
-        await interaction.response.send_message(
-            "❌ Team incomplete\nSet slot 1 (TANK), slot 2 (ATTACK), slot 3 (SUPPORT).",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content="❌ Team incomplete\nSet slot 1 (TANK), slot 2 (ATTACK), slot 3 (SUPPORT)."
         )
         return
 
@@ -917,7 +1052,7 @@ async def battle(interaction: discord.Interaction):
     lines.append(f"💰 Coins: +{coin_gain}")
     lines.append(f"🔋 Energy: +{energy_gain}")
 
-    await interaction.response.send_message("\n".join(lines))
+    await interaction.edit_original_response(content="\n".join(lines))
 
 
 client.run(TOKEN)
