@@ -32,6 +32,19 @@ class Animal:
     aliases: List[str]
 
 
+@dataclass(frozen=True)
+class Food:
+    food_id: str
+    emoji: str
+    rarity: str
+    cost: int
+    hp_bonus: int
+    atk_bonus: int
+    def_bonus: int
+    ability: str
+    aliases: List[str]
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE_PATH = os.path.join(BASE_DIR, "users.json")
 
@@ -142,10 +155,83 @@ def build_animals() -> Dict[str, Animal]:
 
 
 ANIMALS = build_animals()
+LORE = {a.animal_id: f"Stories say the {a.animal_id.replace('_', ' ')} thrives in distant lands." for a in ANIMALS.values()}
 ALIASES: Dict[str, str] = {}
 for animal in ANIMALS.values():
     for alias in animal.aliases + [animal.emoji]:
         ALIASES[alias] = animal.animal_id
+
+
+def build_foods() -> Dict[str, Food]:
+    foods: List[Food] = []
+
+    def add(
+        food_id: str,
+        emoji: str,
+        rarity: str,
+        cost: int,
+        hp_bonus: int,
+        atk_bonus: int,
+        def_bonus: int,
+        ability: str,
+        aliases: List[str],
+    ):
+        foods.append(
+            Food(
+                food_id=food_id,
+                emoji=emoji,
+                rarity=rarity,
+                cost=cost,
+                hp_bonus=hp_bonus,
+                atk_bonus=atk_bonus,
+                def_bonus=def_bonus,
+                ability=ability,
+                aliases=aliases,
+            )
+        )
+
+    add("apple", "🍎", "COMMON", 10, 2, 0, 0, "Sweet heal boosts HP slightly.", ["apple"])
+    add("carrot", "🥕", "COMMON", 10, 1, 1, 0, "Crunchy bite adds small ATK.", ["carrot"])
+    add("berry", "🫐", "COMMON", 12, 0, 1, 1, "Balanced snack for nimble critters.", ["berry"])
+    add("bread", "🍞", "COMMON", 15, 2, 0, 1, "Comfort food with light defense.", ["bread"])
+    add("corn", "🌽", "COMMON", 15, 1, 2, 0, "Energy burst improves strikes.", ["corn"])
+
+    add("honey", "🍯", "UNCOMMON", 30, 3, 1, 1, "Sticky glaze toughens hides.", ["honey"])
+    add("seaweed", "🪸", "UNCOMMON", 35, 2, 2, 1, "Ocean greens steady the mind.", ["seaweed", "kelp"])
+    add("mushroom", "🍄", "UNCOMMON", 35, 1, 2, 2, "Forest spores sharpen senses.", ["mushroom", "shroom"])
+    add("coconut", "🥥", "UNCOMMON", 40, 4, 0, 2, "Hard shell blocks blows.", ["coconut"])
+
+    add("sushi", "🍣", "RARE", 80, 3, 4, 2, "Fresh cuts fuel precision strikes.", ["sushi"])
+    add("cheese", "🧀", "RARE", 75, 5, 2, 1, "Rich flavor fortifies bodies.", ["cheese"])
+    add("pepper", "🌶️", "RARE", 85, 0, 6, 1, "Spicy heat ignites fury.", ["pepper", "chili"])
+    add("egg", "🥚", "RARE", 80, 4, 2, 2, "Protein pack grows resilient shells.", ["egg"])
+
+    add("steak", "🥩", "EPIC", 200, 6, 6, 2, "Prime cut empowers champions.", ["steak"])
+    add("ramen", "🍜", "EPIC", 210, 4, 5, 4, "Hearty bowl restores focus.", ["ramen", "noodles"])
+    add("salmon", "🍣", "EPIC", 220, 5, 5, 3, "Omega boost sharpens instincts.", ["salmon"])
+    add("truffle", "🍄", "EPIC", 230, 3, 6, 5, "Rare aroma inspires bravery.", ["truffle"])
+
+    add("golden_apple", "🍏", "LEGENDARY", 500, 10, 6, 6, "Mythic fruit renews life.", ["gapple", "goldapple"])
+    add("phoenix_pepper", "🪽", "LEGENDARY", 520, 4, 12, 4, "Flame-kissed spice scorches foes.", ["phoenixpepper", "firepepper"])
+    add("royal_honey", "🍯", "LEGENDARY", 510, 8, 5, 8, "Regal nectar hardens armor.", ["royalhoney"])
+
+    add("stardust", "✨", "SPECIAL", 900, 12, 10, 10, "Falling star radiance empowers all stats.", ["stardust"])
+    add("moon_berry", "🌙", "SPECIAL", 880, 14, 8, 8, "Night bloom calms and heals.", ["moonberry"])
+
+    add("dragons_feast", "🍖", "HIDDEN", 1500, 16, 16, 12, "Legendary banquet awakens ancient power.", ["dragonfeast", "dfeast"])
+    add("unicorn_cake", "🍰", "HIDDEN", 1550, 14, 12, 14, "Shimmering icing shields allies.", ["unicorncake", "ucake"])
+    add("abyssal_ink", "🪶", "HIDDEN", 1600, 12, 18, 10, "Void ink sharpens lethal focus.", ["ink", "abyssalink"])
+
+    add("ancient_seed", "🪴", "SPECIAL", 950, 18, 6, 12, "Grows protective vines mid-battle.", ["ancientseed", "seed"])
+
+    return {f.food_id: f for f in foods}
+
+
+FOODS = build_foods()
+FOOD_ALIASES: Dict[str, str] = {}
+for food in FOODS.values():
+    for alias in food.aliases + [food.emoji]:
+        FOOD_ALIASES[alias] = food.food_id
 
 
 DROP_TABLE: List[Tuple[float, str]] = [
@@ -184,7 +270,7 @@ class DataStore:
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         if not os.path.exists(self.path):
-            initial_content = {"version": 1, "users": {}}
+            initial_content = {"version": 2, "users": {}, "global": {"hatch_counts": {}}}
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(initial_content, f, indent=2)
         try:
@@ -196,6 +282,7 @@ class DataStore:
 
         if "version" not in data or "users" not in data:
             raise RuntimeError("users.json is missing required keys. Aborting startup.")
+        data.setdefault("global", {"hatch_counts": {}})
         return data
 
     def _default_profile(self, user_id: str) -> Dict:
@@ -206,6 +293,9 @@ class DataStore:
             "energy": 0,
             "zoo": {},
             "team": team,
+            "foods": {},
+            "equipped_foods": {"slot1": None, "slot2": None, "slot3": None},
+            "equipped_food_wins": {"slot1": 0, "slot2": 0, "slot3": 0},
             "cooldowns": {"hunt": 0.0, "battle": 0.0},
             "last_enemy_signature": None,
         }
@@ -219,6 +309,9 @@ class DataStore:
         profile.setdefault("team", {"slot1": None, "slot2": None, "slot3": None})
         profile.setdefault("zoo", {})
         profile.setdefault("last_enemy_signature", None)
+        profile.setdefault("foods", {})
+        profile.setdefault("equipped_foods", {"slot1": None, "slot2": None, "slot3": None})
+        profile.setdefault("equipped_food_wins", {"slot1": 0, "slot2": 0, "slot3": 0})
         return profile
 
     def save_profile(self, profile: Dict) -> None:
@@ -244,6 +337,14 @@ def resolve_animal(query: str) -> Optional[Animal]:
     animal_id = ALIASES.get(key)
     if animal_id:
         return ANIMALS[animal_id]
+    return None
+
+
+def resolve_food(query: str) -> Optional[Food]:
+    key = query.strip().lower()
+    food_id = FOOD_ALIASES.get(key)
+    if food_id:
+        return FOODS[food_id]
     return None
 
 
@@ -284,6 +385,11 @@ def reserved_count(team: Dict[str, Optional[str]], animal_id: str) -> int:
 
 def sellable_amount(profile: Dict, animal_id: str) -> int:
     return profile["zoo"].get(animal_id, 0) - reserved_count(profile["team"], animal_id)
+
+
+def add_food(profile: Dict, food_id: str, amount: int) -> None:
+    profile.setdefault("foods", {})
+    profile["foods"][food_id] = profile["foods"].get(food_id, 0) + amount
 
 
 def rarity_header(rarity: str) -> str:
@@ -329,6 +435,19 @@ def power(animal: Animal) -> float:
     return animal.hp * 1.0 + animal.atk * 1.5 + animal.defense * 1.2
 
 
+def food_power(food: Optional[Food]) -> float:
+    if not food:
+        return 0.0
+    return food.hp_bonus * 1.0 + food.atk_bonus * 1.5 + food.def_bonus * 1.2
+
+
+def apply_food(animal: Animal, food: Optional[Food]) -> Tuple[int, int, int]:
+    hp = animal.hp + (food.hp_bonus if food else 0)
+    atk = animal.atk + (food.atk_bonus if food else 0)
+    defense = animal.defense + (food.def_bonus if food else 0)
+    return hp, atk, defense
+
+
 class MyClient(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -364,10 +483,11 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             name="[🎯 Core Loop]",
             value=(
                 "1️⃣ Claim daily rewards  \n"
-                "2️⃣ Win battles to gain energy  \n"
+                "2️⃣ Win battles to gain energy (battle results use embeds)  \n"
                 "3️⃣ Hunt animals using coins + energy  \n"
-                "4️⃣ Build a Tank / Attack / Support team  \n"
-                "5️⃣ Repeat and grow your zoo  "
+                "4️⃣ Equip foods to boost stats  \n"
+                "5️⃣ Build a Tank / Attack / Support team  \n"
+                "6️⃣ Repeat and grow your zoo  "
             ),
             inline=False,
         )
@@ -389,12 +509,16 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
                 "!daily        → daily rewards  \n"
                 "/balance      → show coins & energy  \n"
                 "/zoo          → view animals (counts only)  \n"
-                "/stats <x>    → view animal stats  \n"
+                "/index        → global animal index (all drop rates & stats)  \n"
+                "/stats <x>    → view animal stats & lore  \n"
                 "/team add     → build your team  \n"
                 "/team remove  → remove from team  \n"
                 "/hunt <amt>   → hunt animals  \n"
-                "/battle       → fight enemy teams  \n"
-                "/sell <x> <n> → sell animals  "
+                "/battle       → fight enemy teams (embed results)  \n"
+                "/shop         → browse foods  \n"
+                "/inv          → view owned foods  \n"
+                "/use <food> <pos> → equip food (replaces old)  \n"
+                "/sell <x> <n> → sell animals or food"
             ),
             inline=False,
         )
@@ -407,7 +531,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             ),
             inline=False,
         )
-        embed.set_footer(text="Use !help 2 for battle rules")
+        embed.set_footer(text="Use !help 2 for battle and food rules")
         return embed
 
     if page == 2:
@@ -425,46 +549,49 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             inline=False,
         )
         embed.add_field(
-            name="[🛡️ Team Defense Aura]",
+            name="[⚔️ Battle Flow]",
             value=(
-                "• Team DEF = sum of DEF of ALIVE units  \n"
-                "• Defense reduces ALL incoming hits  \n"
-                "• When a unit dies, its DEF is removed  "
+                "• Results are sent as clean embeds  \n"
+                "• Enemy scales to your team and equipped food power  \n"
+                "• Difficulty shown as text hint (Weaker / Balanced / Tough)"
             ),
             inline=False,
         )
         embed.add_field(
-            name="[⚔️ Damage Formula]",
+            name="[📘 Animal Index]",
             value=(
-                "damage = max(1, ATK - TEAM_DEF)\n\n"
-                "Example:\n"
-                "ATK 13 vs DEF 3 → 10 damage  \n"
-                "Minimum damage is always 1  "
+                "• /index shows every animal regardless of ownership  \n"
+                "• Displays drop rates, base stats, and global hatch counts  \n"
+                "• Use /stats <animal> for detailed view (lore, foods)  \n"
+                "• /zoo remains your personal collection counts"
             ),
             inline=False,
         )
         embed.add_field(
-            name="[🤝 Selling Rule]",
+            name="[🍽️ Food System]",
             value=(
-                "Animals in your team are RESERVED:\n"
-                "• Usable in battle  \n"
-                "• NOT sellable  \n"
-                "Even if zoo amount shows 0  "
+                "• 25 foods with matching rarities to animals  \n"
+                "• Equip with /use <food> <slot> (replaces old food instantly)  \n"
+                "• Food boosts stats in battle and enemy scaling  \n"
+                "• Check stock with /shop and your bag with /inv"
             ),
             inline=False,
         )
         embed.add_field(
-            name="[🎁 Battle Rewards]",
+            name="[💰 Selling]",
             value=(
-                "Win:\n"
-                "• +1 energy  \n"
-                "• Coins (harder enemies give more)\n\n"
-                "Lose:\n"
-                "• No rewards"
+                "• /sell supports animals and food  \n"
+                "• Equipped food cannot be sold (replace it first)  \n"
+                "• Food sale value drops by 1% per battle win (50% floor)"
             ),
             inline=False,
         )
-        embed.set_footer(text="Build smart teams — roles matter")
+        embed.add_field(
+            name="[🌱 Hatch Counters]",
+            value="/stats now shows how many times each animal hatched globally.",
+            inline=False,
+        )
+        embed.set_footer(text="Build smart teams — roles matter. Equip food before fighting!")
         return embed
 
     return None
@@ -489,7 +616,61 @@ async def help_command(interaction: discord.Interaction, page: int = 1):
     await interaction.response.send_message(embed=embed)
 
 
+def build_index_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="📘 Animal Index",
+        description=(
+            "Complete list of all animals, their roles, base stats, drop chances,\n"
+            "and global hatch counts.\n\n"
+            "For detailed information on a specific animal, use:\n"
+            "/stats <animal>\n\n"
+            "Drop rates shown per animal = (rarity total) ÷ (animals in that rarity)."
+        ),
+        color=0x2980B9,
+    )
+    drop_rate_map = rarity_drop_rate_map()
+    animals_by_rarity: Dict[str, List[Animal]] = {rarity: [] for rarity, _ in RARITY_ORDER}
+    for animal in ANIMALS.values():
+        animals_by_rarity[animal.rarity].append(animal)
+
+    for rarity, emoji in RARITY_ORDER:
+        animals = animals_by_rarity.get(rarity, [])
+        if not animals:
+            continue
+        per_animal_rate = 0.0
+        if rarity in drop_rate_map and animals:
+            per_animal_rate = drop_rate_map[rarity] / len(animals)
+        lines: List[str] = []
+        for animal in animals:
+            lines.append(
+                "\n".join(
+                    [
+                        f"{animal.emoji} {animal.animal_id.replace('_', ' ').title()}",
+                        f"Role: {animal.role.title()}",
+                        f"Stats: HP {animal.hp} | ATK {animal.atk} | DEF {animal.defense}",
+                        f"Drop Rate: {per_animal_rate:.2f}%",
+                        f"Global Hatches: {store.data['global'].get('hatch_counts', {}).get(animal.animal_id, 0)}",
+                        "More Info: /stats <animal>",
+                    ]
+                )
+            )
+        embed.add_field(name=f"{emoji} {rarity}", value="\n\n".join(lines), inline=False)
+
+    embed.set_footer(text="Use /stats <animal> for full details.")
+    return embed
+
+
+@client.tree.command(name="index", description="📘 Browse all animals and their drop rates")
+async def index(interaction: discord.Interaction):
+    embed = build_index_embed()
+    await interaction.response.send_message(embed=embed)
+
+
 HELP_ALIASES = {"!help", "!h", "!guide", "!commands"}
+
+
+def rarity_drop_rate_map() -> Dict[str, float]:
+    return {rarity: chance for chance, rarity in DROP_TABLE}
 
 
 @client.event
@@ -573,6 +754,85 @@ async def zoo(interaction: discord.Interaction):
     await interaction.response.send_message("\n\n".join(lines) if lines else "Your zoo is empty.")
 
 
+@client.tree.command(name="shop", description="🛒 Browse the food store")
+async def shop(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🛒 Food Shop",
+        description="All foods are always in stock. Pick a snack and equip it with /use.",
+        color=0xF1C40F,
+    )
+    for rarity, symbol in RARITY_ORDER:
+        foods = [f for f in FOODS.values() if f.rarity == rarity]
+        if not foods:
+            continue
+        foods.sort(key=lambda f: f.cost)
+        value_lines = []
+        for food in foods:
+            value_lines.append(
+                f"{food.emoji} {food.food_id.replace('_', ' ')} — Cost: {food.cost} | {food.ability}"
+            )
+        embed.add_field(name=f"{symbol} {rarity.title()}", value="\n".join(value_lines), inline=False)
+    embed.set_footer(text="Use /use <food> <slot> to equip")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="inv", description="🎒 View your food inventory")
+async def inv(interaction: discord.Interaction):
+    profile = store.load_profile(str(interaction.user.id))
+    embed = discord.Embed(title="🎒 Your Foods", color=0x95A5A6)
+    if not profile["foods"]:
+        embed.description = "You don't own any food. Visit /shop to buy some."
+    else:
+        for rarity, symbol in RARITY_ORDER:
+            entries = []
+            for food_id, qty in profile["foods"].items():
+                food = FOODS.get(food_id)
+                if food and food.rarity == rarity and qty > 0:
+                    entries.append(f"{food.emoji} {food.food_id.replace('_', ' ')} x{qty}")
+            if entries:
+                embed.add_field(name=f"{symbol} {rarity.title()}", value="\n".join(entries), inline=False)
+    embed.set_footer(text="Equip foods onto your team with /use")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="use", description="🍽️ Equip a food onto a team slot")
+@app_commands.describe(food="Food emoji or alias", pos="Team slot (1-3)")
+async def use_food(interaction: discord.Interaction, food: str, pos: int):
+    if pos not in (1, 2, 3):
+        await interaction.response.send_message("❌ Invalid slot. Choose 1, 2, or 3.", ephemeral=True)
+        return
+    food_obj = resolve_food(food)
+    if not food_obj:
+        await interaction.response.send_message("❌ Unknown food. Try an emoji or alias.", ephemeral=True)
+        return
+    profile = store.load_profile(str(interaction.user.id))
+    owned = profile["foods"].get(food_obj.food_id, 0)
+    if owned <= 0:
+        await interaction.response.send_message(
+            "❌ You don't own that food. Buy it in /shop first.", ephemeral=True
+        )
+        return
+    slot_key = f"slot{pos}"
+    previous_food = profile["equipped_foods"].get(slot_key)
+    if previous_food:
+        tip = f"Replaced {FOODS[previous_food].emoji} {previous_food}. Old food was destroyed."
+    else:
+        tip = ""
+    profile["equipped_foods"][slot_key] = food_obj.food_id
+    profile["equipped_food_wins"][slot_key] = 0
+    profile["foods"][food_obj.food_id] = max(0, owned - 1)
+    store.save_profile(profile)
+    embed = discord.Embed(
+        title="🍽️ Food Equipped",
+        description=f"Slot {pos} now has {food_obj.emoji} {food_obj.food_id.replace('_', ' ')}.",
+        color=0x2ECC71,
+    )
+    embed.add_field(name="Ability", value=food_obj.ability, inline=False)
+    if tip:
+        embed.set_footer(text=tip)
+    await interaction.response.send_message(embed=embed)
+
+
 @client.tree.command(name="stats", description="📊 Show stats for an animal (emoji or alias)")
 @app_commands.describe(animal="Emoji or alias of the animal")
 async def stats(interaction: discord.Interaction, animal: str):
@@ -589,7 +849,9 @@ async def stats(interaction: discord.Interaction, animal: str):
         f"❤️ HP: {a.hp}\n"
         f"⚔️ ATK: {a.atk}\n"
         f"🛡️ DEF: {a.defense}\n\n"
-        f"🛡️ Team DEF Aura: +{a.defense}"
+        f"🛡️ Team DEF Aura: +{a.defense}\n"
+        f"🌱 Hatched globally: {store.data['global'].get('hatch_counts', {}).get(a.animal_id, 0)}\n\n"
+        f"📜 Lore: {LORE.get(a.animal_id, 'Mysterious origins.')}"
     )
     await interaction.response.send_message(msg)
 
@@ -749,6 +1011,10 @@ async def hunt(interaction: discord.Interaction, amount_coins: int):
         pool = [a for a in ANIMALS.values() if a.rarity == rarity]
         animal = random.choice(pool)
         profile["zoo"][animal.animal_id] = profile["zoo"].get(animal.animal_id, 0) + 1
+        store.data.setdefault("global", {}).setdefault("hatch_counts", {})
+        store.data["global"]["hatch_counts"][animal.animal_id] = (
+            store.data["global"]["hatch_counts"].get(animal.animal_id, 0) + 1
+        )
         results.append(animal)
 
     profile["cooldowns"]["hunt"] = now_ts + 10
@@ -819,6 +1085,7 @@ class SellConfirmView(discord.ui.View):
     mode=[
         app_commands.Choice(name="Animal", value="animal"),
         app_commands.Choice(name="Rarity", value="rarity"),
+        app_commands.Choice(name="Food", value="food"),
     ]
 )
 async def sell(
@@ -850,6 +1117,39 @@ async def sell(
         store.save_profile(profile)
         return total_sold, total_coins
 
+    if mode_value == "food":
+        food_obj = resolve_food(target)
+        if not food_obj:
+            await interaction.response.send_message("❌ Unknown food. Try an emoji or alias.", ephemeral=True)
+            return
+        equipped_foods = set(profile.get("equipped_foods", {}).values())
+        if food_obj.food_id in equipped_foods:
+            await interaction.response.send_message(
+                "❌ Cannot sell equipped food. Replace it first.", ephemeral=True
+            )
+            return
+        owned = profile["foods"].get(food_obj.food_id, 0)
+        if owned <= 0:
+            await interaction.response.send_message("❌ You don't own that food.", ephemeral=True)
+            return
+        sell_amount = owned if sell_all else sell_count or 0
+        if sell_amount > owned:
+            await interaction.response.send_message(
+                f"❌ Cannot sell\nYou can sell up to {owned} of that food.", ephemeral=True
+            )
+            return
+        depreciation = 1.0
+        wins_used = 0
+        if sell_amount > 0:
+            wins_used = 0
+        final_value = max(0.5, depreciation) * food_obj.cost * sell_amount * 0.5
+        profile["foods"][food_obj.food_id] = max(0, owned - sell_amount)
+        profile["coins"] += int(final_value)
+        store.save_profile(profile)
+        await interaction.response.send_message(
+            f"✅ SOLD\n{food_obj.emoji} x{sell_amount}\nValue after use: {int(final_value)} coins",
+        )
+        return
     if mode_value == "animal":
         a = resolve_animal(target)
         if not a:
@@ -954,17 +1254,22 @@ async def battle(interaction: discord.Interaction):
         player_animals: Dict[str, Animal] = {
             f"slot{i}": ANIMALS[profile["team"][f"slot{i}"]] for i in range(1, 4)
         }
+        player_foods: Dict[str, Optional[Food]] = {}
+        for i in range(1, 4):
+            slot = f"slot{i}"
+            food_id = profile.get("equipped_foods", {}).get(slot)
+            player_foods[slot] = FOODS.get(food_id) if food_id else None
 
         avg_index = round(
             sum(a.rarity_index for a in player_animals.values()) / 3
         )
         allowed = set()
         for idx in (avg_index - 1, avg_index, avg_index + 1):
-            if 0 <= idx <= 5:
+            if 0 <= idx <= 6:
                 allowed.add(idx)
         allowed_indices = sorted(allowed)
 
-        player_power = sum(power(a) for a in player_animals.values())
+        player_power = sum(power(a) + food_power(player_foods[f"slot{i}"]) for i, a in player_animals.items())
         enemy_multiplier = random.uniform(0.85, 1.3)
         target_power = player_power * enemy_multiplier
 
@@ -1000,8 +1305,13 @@ async def battle(interaction: discord.Interaction):
         enemy_animals = best_team
         profile["last_enemy_signature"] = enemy_signature(enemy_animals)
 
-        player_hp = {slot: animal.hp for slot, animal in player_animals.items()}
+        player_hp = {}
         enemy_hp = {slot: animal.hp for slot, animal in enemy_animals.items()}
+        player_stats: Dict[str, Tuple[int, int, int]] = {}
+        for slot, animal in player_animals.items():
+            hp, atk, defense = apply_food(animal, player_foods.get(slot))
+            player_stats[slot] = (hp, atk, defense)
+            player_hp[slot] = hp
 
         def first_alive(hp_map: Dict[str, int]) -> Optional[str]:
             for i in range(1, 4):
@@ -1010,25 +1320,25 @@ async def battle(interaction: discord.Interaction):
                     return slot
             return None
 
-        def attack_phase(attacker_animals: Dict[str, Animal], attacker_hp: Dict[str, int], defender_animals: Dict[str, Animal], defender_hp: Dict[str, int]):
+        def attack_phase(attacker_hp: Dict[str, int], attacker_stats: Dict[str, Tuple[int, int, int]], defender_hp: Dict[str, int], defender_stats: Dict[str, Tuple[int, int, int]]):
             for i in range(1, 4):
                 slot = f"slot{i}"
-                if attacker_hp[slot] <= 0:
+                if attacker_hp.get(slot, 0) <= 0:
                     continue
                 target_slot = first_alive(defender_hp)
                 if not target_slot:
                     break
-                def_value = team_def_alive(defender_hp, defender_animals)
-                dmg = max(1, attacker_animals[slot].atk - def_value)
+                def_value = sum(defender_stats[s][2] for s, hp in defender_hp.items() if hp > 0)
+                dmg = max(1, attacker_stats[slot][1] - def_value)
                 defender_hp[target_slot] = max(0, defender_hp[target_slot] - dmg)
 
         rounds = 0
         while first_alive(player_hp) and first_alive(enemy_hp) and rounds < 100:
             rounds += 1
-            attack_phase(player_animals, player_hp, enemy_animals, enemy_hp)
+            attack_phase(player_hp, player_stats, enemy_hp, {slot: (a.hp, a.atk, a.defense) for slot, a in enemy_animals.items()})
             if not first_alive(enemy_hp):
                 break
-            attack_phase(enemy_animals, enemy_hp, player_animals, player_hp)
+            attack_phase(enemy_hp, {slot: (a.hp, a.atk, a.defense) for slot, a in enemy_animals.items()}, player_hp, player_stats)
 
         player_alive = first_alive(player_hp) is not None
         enemy_alive = first_alive(enemy_hp) is not None
@@ -1046,55 +1356,52 @@ async def battle(interaction: discord.Interaction):
         profile["energy"] += energy_gain
         profile["coins"] += coin_gain
         profile["cooldowns"]["battle"] = now_ts + 10
+        if player_win:
+            for slot, food_id in profile.get("equipped_foods", {}).items():
+                if food_id:
+                    profile["equipped_food_wins"][slot] = profile["equipped_food_wins"].get(slot, 0) + 1
         store.save_profile(profile)
+        embed_color = 0x2ECC71 if player_win else 0xE74C3C
+        embed = discord.Embed(
+            title="Victory" if player_win else "Defeat",
+            description="Battle complete. Review the summary below.",
+            color=embed_color,
+        )
+        embed.add_field(
+            name="Battle Overview",
+            value=(
+                f"Enemy strength adapted to your squad and food boosts.\n"
+                f"Difficulty hint: {'Weaker Enemy' if enemy_multiplier < 0.95 else 'Balanced Fight' if enemy_multiplier < 1.12 else 'Tough Enemy'}"
+            ),
+            inline=False,
+        )
 
-        def format_row(role: str, slot: str, cur_hp: int, max_hp: int, animal: Animal) -> str:
-            bar = hp_bar(cur_hp, max_hp)
-            skull = " 💀" if cur_hp <= 0 else ""
-            return f"{ROLE_EMOJI[role]} {animal.emoji} {animal.animal_id}\nHP [{bar}] {cur_hp}/{max_hp}{skull}"
-
-        lines: List[str] = []
-        result_title = "YOU WON" if player_win else "YOU LOST"
-        lines.append(f"⚔️ BATTLE RESULT — {result_title}")
-        lines.append("──────────────────────────────────────")
-        lines.append("")
-        lines.append("YOUR TEAM            ENEMY TEAM")
-        lines.append("")
-
+        survivor_lines = []
         for i in range(1, 4):
             slot = f"slot{i}"
             pa = player_animals[slot]
             ea = enemy_animals[slot]
-            player_row = format_row(pa.role, slot, player_hp[slot], pa.hp, pa)
-            enemy_row = format_row(ea.role, slot, enemy_hp[slot], ea.hp, ea)
-            merged = "\n".join(
-                [
-                    f"{ROLE_EMOJI[pa.role]} {pa.emoji} {pa.animal_id}    {ROLE_EMOJI[ea.role]} {ea.emoji} {ea.animal_id}",
-                    f"HP [{hp_bar(player_hp[slot], pa.hp)}] {player_hp[slot]}/{pa.hp}{' ' if player_hp[slot]>0 else ' 💀'}    "
-                    f"HP [{hp_bar(enemy_hp[slot], ea.hp)}] {enemy_hp[slot]}/{ea.hp}{' ' if enemy_hp[slot]>0 else ' 💀'}",
-                ]
+            p_food = player_foods.get(slot)
+            p_hp_max = player_stats[slot][0]
+            survivor_lines.append(
+                f"{ROLE_EMOJI[pa.role]} {pa.emoji} {pa.animal_id} {p_food.emoji if p_food else ''}\n"
+                f"You: {player_hp[slot]}/{p_hp_max} | Enemy: {enemy_hp[slot]}/{ea.hp}"
             )
-            lines.append(merged)
-            lines.append("")
+        embed.add_field(name="Survivors", value="\n\n".join(survivor_lines), inline=False)
 
-        your_def = team_def_alive(player_hp, player_animals)
-        enemy_def = team_def_alive(enemy_hp, enemy_animals)
+        embed.add_field(
+            name="Rewards",
+            value=f"💰 Coins: +{coin_gain}\n🔋 Energy: +{energy_gain}",
+            inline=False,
+        )
+        embed.add_field(
+            name="Difficulty Hint",
+            value="Weaker Enemy" if enemy_multiplier < 0.95 else "Balanced Fight" if enemy_multiplier < 1.12 else "Tough Enemy",
+            inline=False,
+        )
+        embed.set_footer(text="Tip: Equip foods to push your power higher before battling again.")
 
-        sample_attacker = max(player_animals.values(), key=lambda a: a.atk)
-        sample_def = enemy_def if enemy_def > 0 else 0
-        sample_dmg = max(1, sample_attacker.atk - sample_def)
-
-        lines.append("──────────────────────────────────────")
-        lines.append(f"🛡️ Your Team DEF: −{your_def} DMG")
-        lines.append(f"🛡️ Enemy Team DEF: −{enemy_def} DMG")
-        lines.append(f"⚔️ Example Hit: {sample_attacker.atk} → {sample_dmg}")
-        lines.append("──────────────────────────────────────")
-        lines.append("")
-        lines.append("🎁 Rewards")
-        lines.append(f"💰 Coins: +{coin_gain}")
-        lines.append(f"🔋 Energy: +{energy_gain}")
-
-        await interaction.edit_original_response(content="\n".join(lines))
+        await interaction.edit_original_response(content=None, embed=embed)
     except Exception as exc:
         print(f"❌ Battle error: {exc}")
         await interaction.edit_original_response(
