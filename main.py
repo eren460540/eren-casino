@@ -1442,20 +1442,25 @@ async def on_ready():
 
     dev_guild = discord.Object(id=DEV_GUILD_ID)
 
-    # 🔥 STEP 1: CLEAR guild commands
+    # 🔥 Clear ONCE (comment this out after success)
     client.tree.clear_commands(guild=dev_guild)
     await client.tree.sync(guild=dev_guild)
     print("🧹 Cleared guild commands")
 
-    # ⚡ STEP 2: RE-SYNC commands to guild
+    # ⚡ Re-sync
     synced = await client.tree.sync(guild=dev_guild)
     print(f"⚡ Re-synced {len(synced)} guild commands")
 
-    # 🌍 STEP 3: Sync globally (keep this)
+    # 🌍 Global sync
     await client.tree.sync()
     print("🌍 Global sync requested")
 
+    # IMPORTANT: DO NOTHING ELSE HERE
+    # Do NOT exit
+    # Do NOT stop the loop
 
 
 
-client.run(TOKEN)
+
+if __name__ == "__main__":
+    client.run(TOKEN)
