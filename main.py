@@ -47,6 +47,7 @@ class Food:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE_PATH = os.path.join(BASE_DIR, "users.json")
+DEFAULT_PREFIX = "zz"
 
 
 RARITY_ORDER = [
@@ -270,7 +271,12 @@ class DataStore:
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         if not os.path.exists(self.path):
-            initial_content = {"version": 2, "users": {}, "global": {"hatch_counts": {}}}
+            initial_content = {
+                "version": 3,
+                "users": {},
+                "global": {"hatch_counts": {}},
+                "prefixes": {},
+            }
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(initial_content, f, indent=2)
         try:
@@ -283,6 +289,9 @@ class DataStore:
         if "version" not in data or "users" not in data:
             raise RuntimeError("users.json is missing required keys. Aborting startup.")
         data.setdefault("global", {"hatch_counts": {}})
+        data.setdefault("prefixes", {})
+        if data.get("version", 1) < 3:
+            data["version"] = 3
         return data
 
     def _default_profile(self, user_id: str) -> Dict:
@@ -316,6 +325,15 @@ class DataStore:
 
     def save_profile(self, profile: Dict) -> None:
         self.data.setdefault("users", {})[profile["user_id"]] = profile
+        self._write_data()
+
+    def get_prefix(self, guild_id: Optional[str]) -> str:
+        if guild_id is None:
+            return DEFAULT_PREFIX
+        return self.data.get("prefixes", {}).get(guild_id, DEFAULT_PREFIX)
+
+    def set_prefix(self, guild_id: str, prefix: str) -> None:
+        self.data.setdefault("prefixes", {})[guild_id] = prefix
         self._write_data()
 
     def _write_data(self) -> None:
@@ -377,6 +395,29 @@ def superscript_number(num: int) -> str:
     if len(num_str) == 1:
         return SUPERSCRIPT_MAP["0"] + SUPERSCRIPT_MAP[num_str]
     return "".join(SUPERSCRIPT_MAP[d] for d in num_str)
+
+
+def current_prefix(guild: Optional[discord.Guild]) -> str:
+    guild_id = str(guild.id) if guild else None
+    return store.get_prefix(guild_id)
+
+
+def strip_prefix(content: str, prefix: str) -> Optional[str]:
+    lowered = content.lower()
+    prefix_lower = prefix.lower()
+    if lowered.startswith(prefix_lower):
+        return content[len(prefix) :].lstrip()
+    return None
+
+
+def validate_prefix(prefix: str) -> Optional[str]:
+    if " " in prefix:
+        return "Prefix cannot contain spaces."
+    if len(prefix) < 1 or len(prefix) > 5:
+        return "Prefix must be between 1 and 5 characters."
+    if any(ch in prefix for ch in {"@", "#", "/"}):
+        return "Prefix cannot include @, #, or /."
+    return None
 
 
 def reserved_count(team: Dict[str, Optional[str]], animal_id: str) -> int:
@@ -462,6 +503,26 @@ class MyClient(discord.Client):
 client = MyClient()
 
 
+async def prefix_only_check(interaction: discord.Interaction) -> bool:
+    hint_prefix = current_prefix(interaction.guild)
+    reminder = f"This bot uses prefix commands.\nTry: {hint_prefix} battle"
+    if interaction.response.is_done():
+        await interaction.followup.send(reminder, ephemeral=True)
+    else:
+        await interaction.response.send_message(reminder, ephemeral=True)
+    raise app_commands.CheckFailure("prefix-commands-only")
+
+
+@client.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.CheckFailure):
+        return
+    raise error
+
+
+client.tree.add_check(prefix_only_check)
+
+
 DEV_GUILD_ID = 1452648204519739483  # your server
 
 @client.event
@@ -484,7 +545,12 @@ async def on_ready():
         print("❌ Dev guild sync failed:", e)
 
 
-def build_help_embed(page: int) -> Optional[discord.Embed]:
+def build_help_embed(page: int, prefix: str, show_admin_hint: bool) -> Optional[discord.Embed]:
+    header_lines = [f"Current prefix: {prefix}"]
+    if show_admin_hint:
+        header_lines.append("Admins can change it using:\n" f"{prefix} prefix <new_prefix>")
+    header = "\n".join(header_lines)
+
     if page == 1:
         embed = discord.Embed(
             title="📘 Emoji Zoo Battle Bot — Help (1/2)",
@@ -493,6 +559,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             ),
             color=0x9B59B6,
         )
+        embed.add_field(name="[Prefix]", value=header, inline=False)
         embed.add_field(
             name="[🎯 Core Loop]",
             value=(
@@ -520,20 +587,20 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
         embed.add_field(
             name="[🧾 Commands]",
             value=(
-                "/daily        → daily rewards  \n"
-                "/balance      → show coins & energy  \n"
-                "/zoo          → view animals (counts only)  \n"
-                "/index        → global animal index (all drop rates & stats)  \n"
-                "/stats <x>    → view animal stats & lore  \n"
-                "/team view    → see your current team  \n"
-                "/team add     → build your team  \n"
-                "/team remove  → remove from team  \n"
-                "/hunt <amt>   → hunt animals  \n"
-                "/battle       → fight enemy teams (embed results)  \n"
-                "/shop         → browse foods  \n"
-                "/inv          → view owned foods  \n"
-                "/use <food> <pos> → equip food (replaces old)  \n"
-                "/sell <x> <n> → sell animals or food"
+                f"{prefix} daily        → claim daily rewards  \n"
+                f"{prefix} balance      → show coins & energy  \n"
+                f"{prefix} zoo          → view animals (counts only)  \n"
+                f"{prefix} index        → global animal index (all drop rates & stats)  \n"
+                f"{prefix} stats <x>    → view animal stats & lore  \n"
+                f"{prefix} team view    → see your current team  \n"
+                f"{prefix} team add     → build your team  \n"
+                f"{prefix} team remove  → remove from team  \n"
+                f"{prefix} hunt <amt>   → hunt animals  \n"
+                f"{prefix} battle       → fight enemy teams (embed results)  \n"
+                f"{prefix} shop         → browse foods  \n"
+                f"{prefix} inv          → view owned foods  \n"
+                f"{prefix} use <food> <pos> → equip food (replaces old)  \n"
+                f"{prefix} sell <x> <n> → sell animals or food"
             ),
             inline=False,
         )
@@ -546,7 +613,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             ),
             inline=False,
         )
-        embed.set_footer(text="Use !help 2 for battle and food rules")
+        embed.set_footer(text=f"Use {prefix} help 2 for battle and food rules")
         return embed
 
     if page == 2:
@@ -554,6 +621,7 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
             title="📘 Emoji Zoo Battle Bot — Help (2/2)",
             color=0x3498DB,
         )
+        embed.add_field(name="[Prefix]", value=header, inline=False)
         embed.add_field(
             name="[🧑‍🤝‍🧑 Team Slots]",
             value=(
@@ -575,35 +643,34 @@ def build_help_embed(page: int) -> Optional[discord.Embed]:
         embed.add_field(
             name="[📘 Animal Index]",
             value=(
-                "• /index shows every animal regardless of ownership  \n"
+                "• Index shows every animal regardless of ownership  \n"
                 "• Displays drop rates, base stats, and global hatch counts  \n"
-                "• Use /stats <animal> for detailed view (lore, foods)  \n"
-                "• /zoo remains your personal collection counts"
+                f"• Use {prefix} stats <animal> for detailed view (lore, foods)  \n"
+                "• Zoo remains your personal collection counts"
             ),
             inline=False,
         )
         embed.add_field(
-            name="[🍽️ Food System]",
+            name="[⚔️ Enemy Scaling]",
             value=(
-                "• 25 foods with matching rarities to animals  \n"
-                "• Equip with /use <food> <slot> (replaces old food instantly)  \n"
-                "• Food boosts stats in battle and enemy scaling  \n"
-                "• Check stock with /shop and your bag with /inv"
+                "• Enemy team is generated around your power  \n"
+                "• Slight randomness keeps fights fresh  \n"
+                "• Battles consume time-based cooldowns"
             ),
             inline=False,
         )
         embed.add_field(
-            name="[💰 Selling]",
+            name="[✨ Food Equipping]",
             value=(
-                "• /sell supports animals and food  \n"
-                "• Equipped food cannot be sold (replace it first)  \n"
-                "• Food sale value drops by 1% per battle win (50% floor)"
+                f"• Equip foods onto specific slots using {prefix} use  \n"
+                "• Replacing food destroys the old one  \n"
+                "• Each win adds 1% bonus to equipped food power"
             ),
             inline=False,
         )
         embed.add_field(
             name="[🌱 Hatch Counters]",
-            value="/stats now shows how many times each animal hatched globally.",
+            value="Stats now show how many times each animal hatched globally.",
             inline=False,
         )
         embed.set_footer(text="Build smart teams — roles matter. Equip food before fighting!")
@@ -622,23 +689,20 @@ def parse_help_page(content: str) -> int:
 @client.tree.command(name="help", description="📘 View the Emoji Zoo help pages")
 @app_commands.describe(page="Help page number (1 or 2)")
 async def help_command(interaction: discord.Interaction, page: int = 1):
-    embed = build_help_embed(page)
-    if not embed:
-        await interaction.response.send_message(
-            "❌ Invalid page. Choose 1 or 2.", ephemeral=True
-        )
-        return
-    await interaction.response.send_message(embed=embed)
+    hint_prefix = current_prefix(interaction.guild)
+    await interaction.response.send_message(
+        f"This bot uses prefix commands.\nTry: {hint_prefix} battle", ephemeral=True
+    )
 
 
-def build_index_embed() -> discord.Embed:
+def build_index_embed(prefix: str) -> discord.Embed:
     embed = discord.Embed(
         title="📘 Animal Index",
         description=(
             "Complete list of all animals, their roles, base stats, drop chances,\n"
             "and global hatch counts.\n\n"
             "For detailed information on a specific animal, use:\n"
-            "/stats <animal>\n\n"
+            f"{prefix} stats <animal>\n\n"
             "Drop rates shown per animal = (rarity total) ÷ (animals in that rarity)."
         ),
         color=0x2980B9,
@@ -665,23 +729,21 @@ def build_index_embed() -> discord.Embed:
                         f"Stats: HP {animal.hp} | ATK {animal.atk} | DEF {animal.defense}",
                         f"Drop Rate: {per_animal_rate:.2f}%",
                         f"Global Hatches: {store.data['global'].get('hatch_counts', {}).get(animal.animal_id, 0)}",
-                        "More Info: /stats <animal>",
+                        f"More Info: {prefix} stats <animal>",
                     ]
                 )
             )
         embed.add_field(name=f"{emoji} {rarity}", value="\n\n".join(lines), inline=False)
 
-    embed.set_footer(text="Use /stats <animal> for full details.")
+    embed.set_footer(text=f"Use {prefix} stats <animal> for full details.")
     return embed
 
 
 @client.tree.command(name="index", description="📘 Browse all animals and their drop rates")
 async def index(interaction: discord.Interaction):
-    embed = build_index_embed()
+    prefix = current_prefix(interaction.guild)
+    embed = build_index_embed(prefix)
     await interaction.response.send_message(embed=embed)
-
-
-HELP_ALIASES = {"!help", "!h", "!guide", "!commands"}
 
 
 def rarity_drop_rate_map() -> Dict[str, float]:
@@ -696,13 +758,12 @@ async def on_message(message: discord.Message):
     lowered = content.lower()
     if not lowered:
         return
-    if any(lowered.startswith(alias) for alias in HELP_ALIASES):
-        page = parse_help_page(lowered)
-        embed = build_help_embed(page)
-        if not embed:
-            await message.channel.send("❌ Invalid page. Choose 1 or 2.")
-            return
-        await message.channel.send(embed=embed)
+    prefix = current_prefix(message.guild)
+
+    if lowered.startswith("/"):
+        await message.channel.send(
+            f"This bot uses prefix commands.\nTry: {prefix} battle"
+        )
         return
 
     if lowered.startswith("-data"):
@@ -711,6 +772,64 @@ async def on_message(message: discord.Message):
             "📂 Current users.json backup. Replace your local file with this copy.",
             file=discord.File(DATA_FILE_PATH, filename="users.json"),
         )
+        return
+
+    stripped = strip_prefix(content, prefix)
+    if stripped is None:
+        return
+
+    parts = stripped.split()
+    if not parts:
+        return
+
+    command = parts[0].lower()
+    args = parts[1:]
+
+    if command == "help":
+        page = parse_help_page(" ".join([command] + args))
+        embed = build_help_embed(
+            page,
+            prefix,
+            bool(
+                message.guild
+                and (
+                    message.author.guild_permissions.manage_guild
+                    or message.author.guild_permissions.administrator
+                )
+            ),
+        )
+        if not embed:
+            await message.channel.send("❌ Invalid page. Choose 1 or 2.")
+            return
+        await message.channel.send(embed=embed)
+        return
+
+    if command in {"prefix", "setprefix", "set-prefix", "changeprefix"}:
+        if not message.guild:
+            await message.channel.send(
+                "❌ Prefix changes can only be made inside servers."
+            )
+            return
+        member = message.author
+        if not (
+            member.guild_permissions.administrator
+            or member.guild_permissions.manage_guild
+        ):
+            await message.channel.send(
+                "❌ You do not have permission to change the prefix."
+            )
+            return
+        if not args:
+            await message.channel.send("❌ Usage: prefix <new_prefix>")
+            return
+        new_prefix = args[0]
+        error = validate_prefix(new_prefix)
+        if error:
+            await message.channel.send(f"❌ {error}")
+            return
+        store.set_prefix(str(message.guild.id), new_prefix)
+        await message.channel.send(f"✅ Server prefix updated to: {new_prefix}")
+        return
 
 
 @client.tree.command(name="balance", description="💼 Check your coins and energy")
